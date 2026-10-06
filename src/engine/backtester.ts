@@ -29,7 +29,8 @@ export const DEFAULT_SETTINGS: SimulationSettings = {
   fixedPositionSize: 20,
   commissionPercent: 0.05,
   slippagePercent: 0.02,
-  allowShorting: true
+  allowShorting: true,
+  maxOpenPositions: 2
 };
 
 export function runBacktest(
@@ -43,9 +44,10 @@ export function runBacktest(
   logs: string[] = []
 ): BacktestResult {
   const settings: SimulationSettings = { ...DEFAULT_SETTINGS, ...customSettings };
+  const maxOpenPositions = settings.maxOpenPositions ?? 2;
 
   let capital = settings.initialCapital;
-  let activePosition: Position | null = null;
+  let openPositions: Position[] = [];
   const closedTrades: Trade[] = [];
   const equityCurve: EquityPoint[] = [];
 
@@ -61,35 +63,36 @@ export function runBacktest(
     const currentPrice = candle.close;
 
     // --- 1. INTRA-BAR STOP LOSS & TAKE PROFIT CHECKS ---
-    if (activePosition) {
+    const remainingPositions: Position[] = [];
+    for (const pos of openPositions) {
       let exitPrice: number | null = null;
       let exitReason: Trade['exitReason'] | null = null;
 
-      if (activePosition.type === 'LONG') {
-        if (activePosition.stopLoss && candle.low <= activePosition.stopLoss) {
-          exitPrice = activePosition.stopLoss * (1 - settings.slippagePercent / 100);
+      if (pos.type === 'LONG') {
+        if (pos.stopLoss && candle.low <= pos.stopLoss) {
+          exitPrice = pos.stopLoss * (1 - settings.slippagePercent / 100);
           exitReason = 'STOP_LOSS';
-        } else if (activePosition.takeProfit && candle.high >= activePosition.takeProfit) {
-          exitPrice = activePosition.takeProfit * (1 - settings.slippagePercent / 100);
+        } else if (pos.takeProfit && candle.high >= pos.takeProfit) {
+          exitPrice = pos.takeProfit * (1 - settings.slippagePercent / 100);
           exitReason = 'TAKE_PROFIT';
         }
-      } else if (activePosition.type === 'SHORT') {
-        if (activePosition.stopLoss && candle.high >= activePosition.stopLoss) {
-          exitPrice = activePosition.stopLoss * (1 + settings.slippagePercent / 100);
+      } else if (pos.type === 'SHORT') {
+        if (pos.stopLoss && candle.high >= pos.stopLoss) {
+          exitPrice = pos.stopLoss * (1 + settings.slippagePercent / 100);
           exitReason = 'STOP_LOSS';
-        } else if (activePosition.takeProfit && candle.low <= activePosition.takeProfit) {
-          exitPrice = activePosition.takeProfit * (1 + settings.slippagePercent / 100);
+        } else if (pos.takeProfit && candle.low <= pos.takeProfit) {
+          exitPrice = pos.takeProfit * (1 + settings.slippagePercent / 100);
           exitReason = 'TAKE_PROFIT';
         }
       }
 
       if (exitPrice !== null && exitReason !== null) {
-        const invested = activePosition.size * activePosition.entryPrice;
-        const grossPnl = activePosition.type === 'LONG'
-          ? (exitPrice - activePosition.entryPrice) * activePosition.size
-          : (activePosition.entryPrice - exitPrice) * activePosition.size;
+        const invested = pos.size * pos.entryPrice;
+        const grossPnl = pos.type === 'LONG'
+          ? (exitPrice - pos.entryPrice) * pos.size
+          : (pos.entryPrice - exitPrice) * pos.size;
 
-        const commission = (invested + activePosition.size * exitPrice) * (settings.commissionPercent / 100);
+        const commission = (invested + pos.size * exitPrice) * (settings.commissionPercent / 100);
         const netPnl = grossPnl - commission;
         const pnlPercent = (netPnl / invested) * 100;
 
@@ -97,58 +100,61 @@ export function runBacktest(
 
         closedTrades.push({
           id: `trade_${closedTrades.length + 1}`,
-          type: activePosition.type,
-          entryTime: activePosition.entryTime,
-          entryPrice: Number(activePosition.entryPrice.toFixed(2)),
+          type: pos.type,
+          entryTime: pos.entryTime,
+          entryPrice: Number(pos.entryPrice.toFixed(2)),
           exitTime: candle.time,
           exitPrice: Number(exitPrice.toFixed(2)),
-          size: Number(activePosition.size.toFixed(4)),
+          size: Number(pos.size.toFixed(4)),
           investedAmount: Number(invested.toFixed(2)),
           pnl: Number(netPnl.toFixed(2)),
           pnlPercent: Number(pnlPercent.toFixed(2)),
           exitReason,
-          barsHeld: i - activePosition.entryIndex,
-          stopLoss: activePosition.stopLoss,
-          takeProfit: activePosition.takeProfit
+          barsHeld: i - pos.entryIndex,
+          stopLoss: pos.stopLoss,
+          takeProfit: pos.takeProfit
         });
-
-        activePosition = null;
+      } else {
+        remainingPositions.push(pos);
       }
     }
+    openPositions = remainingPositions;
 
     // --- 2. EVALUATE STRATEGY SIGNALS AT THIS BAR ---
     const signal = signalMap.get(i);
     if (signal) {
-      if (signal.action === 'CLOSE_ALL' && activePosition) {
-        const exitPrice = (signal.price || currentPrice) * (activePosition.type === 'LONG' ? (1 - settings.slippagePercent / 100) : (1 + settings.slippagePercent / 100));
-        const invested = activePosition.size * activePosition.entryPrice;
-        const grossPnl = activePosition.type === 'LONG'
-          ? (exitPrice - activePosition.entryPrice) * activePosition.size
-          : (activePosition.entryPrice - exitPrice) * activePosition.size;
-        const commission = (invested + activePosition.size * exitPrice) * (settings.commissionPercent / 100);
-        const netPnl = grossPnl - commission;
-        const pnlPercent = (netPnl / invested) * 100;
+      if (signal.action === 'CLOSE_ALL' && openPositions.length > 0) {
+        for (const pos of openPositions) {
+          const exitPrice = (signal.price || currentPrice) * (pos.type === 'LONG' ? (1 - settings.slippagePercent / 100) : (1 + settings.slippagePercent / 100));
+          const invested = pos.size * pos.entryPrice;
+          const grossPnl = pos.type === 'LONG'
+            ? (exitPrice - pos.entryPrice) * pos.size
+            : (pos.entryPrice - exitPrice) * pos.size;
+          const commission = (invested + pos.size * exitPrice) * (settings.commissionPercent / 100);
+          const netPnl = grossPnl - commission;
+          const pnlPercent = (netPnl / invested) * 100;
 
-        capital += invested + netPnl;
+          capital += invested + netPnl;
 
-        closedTrades.push({
-          id: `trade_${closedTrades.length + 1}`,
-          type: activePosition.type,
-          entryTime: activePosition.entryTime,
-          entryPrice: Number(activePosition.entryPrice.toFixed(2)),
-          exitTime: candle.time,
-          exitPrice: Number(exitPrice.toFixed(2)),
-          size: Number(activePosition.size.toFixed(4)),
-          investedAmount: Number(invested.toFixed(2)),
-          pnl: Number(netPnl.toFixed(2)),
-          pnlPercent: Number(pnlPercent.toFixed(2)),
-          exitReason: 'SIGNAL_EXIT',
-          barsHeld: i - activePosition.entryIndex,
-          stopLoss: activePosition.stopLoss,
-          takeProfit: activePosition.takeProfit
-        });
-        activePosition = null;
-      } else if (signal.action === 'BUY' && !activePosition) {
+          closedTrades.push({
+            id: `trade_${closedTrades.length + 1}`,
+            type: pos.type,
+            entryTime: pos.entryTime,
+            entryPrice: Number(pos.entryPrice.toFixed(2)),
+            exitTime: candle.time,
+            exitPrice: Number(exitPrice.toFixed(2)),
+            size: Number(pos.size.toFixed(4)),
+            investedAmount: Number(invested.toFixed(2)),
+            pnl: Number(netPnl.toFixed(2)),
+            pnlPercent: Number(pnlPercent.toFixed(2)),
+            exitReason: 'SIGNAL_EXIT',
+            barsHeld: i - pos.entryIndex,
+            stopLoss: pos.stopLoss,
+            takeProfit: pos.takeProfit
+          });
+        }
+        openPositions = [];
+      } else if (signal.action === 'BUY' && openPositions.length < maxOpenPositions) {
         const execPrice = (signal.price || currentPrice) * (1 + settings.slippagePercent / 100);
         let tradeCapital = 0;
 
@@ -163,12 +169,13 @@ export function runBacktest(
           tradeCapital = capital * 0.25;
         }
 
+        tradeCapital = Math.min(tradeCapital, capital * 0.95);
         const size = tradeCapital / execPrice;
         const commission = tradeCapital * (settings.commissionPercent / 100);
 
         if (capital >= tradeCapital + commission && size > 0) {
           capital -= (tradeCapital + commission);
-          activePosition = {
+          openPositions.push({
             type: 'LONG',
             entryTime: candle.time,
             entryIndex: i,
@@ -177,9 +184,9 @@ export function runBacktest(
             stopLoss: signal.stopLoss,
             takeProfit: signal.takeProfit,
             reason: signal.reason
-          };
+          });
         }
-      } else if (signal.action === 'SELL' && !activePosition && settings.allowShorting) {
+      } else if (signal.action === 'SELL' && openPositions.length < maxOpenPositions && settings.allowShorting) {
         const execPrice = (signal.price || currentPrice) * (1 - settings.slippagePercent / 100);
         let tradeCapital = 0;
 
@@ -194,12 +201,13 @@ export function runBacktest(
           tradeCapital = capital * 0.25;
         }
 
+        tradeCapital = Math.min(tradeCapital, capital * 0.95);
         const size = tradeCapital / execPrice;
         const commission = tradeCapital * (settings.commissionPercent / 100);
 
         if (capital >= tradeCapital + commission && size > 0) {
           capital -= (tradeCapital + commission);
-          activePosition = {
+          openPositions.push({
             type: 'SHORT',
             entryTime: candle.time,
             entryIndex: i,
@@ -208,21 +216,21 @@ export function runBacktest(
             stopLoss: signal.stopLoss,
             takeProfit: signal.takeProfit,
             reason: signal.reason
-          };
+          });
         }
       }
     }
 
     // --- 3. CALCULATE MARK-TO-MARKET EQUITY ---
-    let openPnl = 0;
-    if (activePosition) {
-      const positionValue = activePosition.type === 'LONG'
-        ? activePosition.size * currentPrice
-        : activePosition.size * (2 * activePosition.entryPrice - currentPrice);
-      openPnl = positionValue;
+    let openPositionsValue = 0;
+    for (const pos of openPositions) {
+      const positionValue = pos.type === 'LONG'
+        ? pos.size * currentPrice
+        : pos.size * (2 * pos.entryPrice - currentPrice);
+      openPositionsValue += positionValue;
     }
 
-    const currentTotalEquity = capital + openPnl;
+    const currentTotalEquity = capital + openPositionsValue;
 
     if (currentTotalEquity > peakEquity) {
       peakEquity = currentTotalEquity;
@@ -249,37 +257,40 @@ export function runBacktest(
     });
   }
 
-  // Close any leftover open position at final bar
-  if (activePosition && candles.length > 0) {
+  // Close any leftover open positions at final bar
+  if (openPositions.length > 0 && candles.length > 0) {
     const lastCandle = candles[candles.length - 1];
     const exitPrice = lastCandle.close;
-    const invested = activePosition.size * activePosition.entryPrice;
-    const grossPnl = activePosition.type === 'LONG'
-      ? (exitPrice - activePosition.entryPrice) * activePosition.size
-      : (activePosition.entryPrice - exitPrice) * activePosition.size;
-    const commission = (invested + activePosition.size * exitPrice) * (settings.commissionPercent / 100);
-    const netPnl = grossPnl - commission;
-    const pnlPercent = (netPnl / invested) * 100;
 
-    capital += invested + netPnl;
+    for (const pos of openPositions) {
+      const invested = pos.size * pos.entryPrice;
+      const grossPnl = pos.type === 'LONG'
+        ? (exitPrice - pos.entryPrice) * pos.size
+        : (pos.entryPrice - exitPrice) * pos.size;
+      const commission = (invested + pos.size * exitPrice) * (settings.commissionPercent / 100);
+      const netPnl = grossPnl - commission;
+      const pnlPercent = (netPnl / invested) * 100;
 
-    closedTrades.push({
-      id: `trade_${closedTrades.length + 1}`,
-      type: activePosition.type,
-      entryTime: activePosition.entryTime,
-      entryPrice: Number(activePosition.entryPrice.toFixed(2)),
-      exitTime: lastCandle.time,
-      exitPrice: Number(exitPrice.toFixed(2)),
-      size: Number(activePosition.size.toFixed(4)),
-      investedAmount: Number(invested.toFixed(2)),
-      pnl: Number(netPnl.toFixed(2)),
-      pnlPercent: Number(pnlPercent.toFixed(2)),
-      exitReason: 'END_OF_DATA',
-      barsHeld: candles.length - 1 - activePosition.entryIndex,
-      stopLoss: activePosition.stopLoss,
-      takeProfit: activePosition.takeProfit
-    });
-    activePosition = null;
+      capital += invested + netPnl;
+
+      closedTrades.push({
+        id: `trade_${closedTrades.length + 1}`,
+        type: pos.type,
+        entryTime: pos.entryTime,
+        entryPrice: Number(pos.entryPrice.toFixed(2)),
+        exitTime: lastCandle.time,
+        exitPrice: Number(exitPrice.toFixed(2)),
+        size: Number(pos.size.toFixed(4)),
+        investedAmount: Number(invested.toFixed(2)),
+        pnl: Number(netPnl.toFixed(2)),
+        pnlPercent: Number(pnlPercent.toFixed(2)),
+        exitReason: 'END_OF_DATA',
+        barsHeld: candles.length - 1 - pos.entryIndex,
+        stopLoss: pos.stopLoss,
+        takeProfit: pos.takeProfit
+      });
+    }
+    openPositions = [];
   }
 
   // --- 4. COMPUTE PERFORMANCE METRICS ---

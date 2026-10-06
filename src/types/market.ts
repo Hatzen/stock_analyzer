@@ -127,6 +127,7 @@ export interface SimulationSettings {
   commissionPercent: number;
   slippagePercent: number;
   allowShorting: boolean;
+  maxOpenPositions?: number;
 }
 
 // Chunking & Comparative Flow Types

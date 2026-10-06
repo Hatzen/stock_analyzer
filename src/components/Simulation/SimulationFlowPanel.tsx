@@ -14,13 +14,15 @@ import {
   Zap
 } from 'lucide-react';
 
-import type { RealLifeAssetInfo } from '../../data/realLifeData';
+import type { RealLifeAssetInfo, MarketTimeframe } from '../../data/realLifeData';
 
 interface SimulationFlowPanelProps {
   // Asset state
   selectedAssetId: string;
   onSelectAssetId: (id: string) => void;
   availableAssets?: RealLifeAssetInfo[];
+  timeframe?: MarketTimeframe;
+  onChangeTimeframe?: (tf: MarketTimeframe) => void;
   onOpenDataModal?: () => void;
 
   // Chunk state
@@ -59,6 +61,8 @@ export const SimulationFlowPanel: React.FC<SimulationFlowPanelProps> = ({
   selectedAssetId,
   onSelectAssetId,
   availableAssets = REAL_LIFE_ASSETS,
+  timeframe = '1H',
+  onChangeTimeframe,
   onOpenDataModal,
   chunkDuration,
   onChangeChunkDuration,
@@ -91,7 +95,7 @@ export const SimulationFlowPanel: React.FC<SimulationFlowPanelProps> = ({
 
   return (
     <div className="w-full bg-[#0F141C] border border-[#1E293B] rounded-2xl p-3.5 flex flex-col gap-3 shadow-2xl">
-      {/* Row 1: Real-Life Asset Dropdown & Chunk Sizing */}
+      {/* Row 1: Real-Life Asset Dropdown, Timeframe (1H/1D) & Chunk Sizing */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#1E293B]/70 pb-3">
         {/* Real Asset Dropdown */}
         <div className="flex flex-wrap items-center gap-2">
@@ -113,11 +117,35 @@ export const SimulationFlowPanel: React.FC<SimulationFlowPanelProps> = ({
             </select>
           </div>
 
-          {/* Authentic Real-Market Badge */}
-          <span className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-emerald-400 font-mono text-[11px] font-semibold">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>Echte Börsenkurse (2023–2026)</span>
-          </span>
+          {/* Timeframe Toggle: 1H (Intraday / Daytrading) vs 1D (Daily Macro) */}
+          {onChangeTimeframe && (
+            <div className="flex items-center bg-[#131924] p-0.5 rounded-lg border border-[#1E293B] text-xs">
+              <span className="text-[11px] text-slate-400 px-2 font-medium">Zeiteinheit:</span>
+              <button
+                onClick={() => onChangeTimeframe('1H')}
+                title="1-Stunden Kerzen (Daytrading & Intraday) - Ermöglicht 100+ Trades pro Jahr"
+                className={`px-2.5 py-1 rounded-md font-mono font-semibold transition-colors flex items-center gap-1.5 ${
+                  timeframe === '1H'
+                    ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>1H Intraday</span>
+                <span className="text-[9px] px-1 py-0.2 rounded bg-black/30 font-bold">100+ Trades</span>
+              </button>
+              <button
+                onClick={() => onChangeTimeframe('1D')}
+                title="Tageskerzen (Macro Swing)"
+                className={`px-2.5 py-1 rounded-md font-mono font-semibold transition-colors ${
+                  timeframe === '1D'
+                    ? 'bg-sky-500 text-slate-950 shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                1D Tag
+              </button>
+            </div>
+          )}
 
           {onOpenDataModal && (
             <button

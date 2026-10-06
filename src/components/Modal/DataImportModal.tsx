@@ -508,6 +508,18 @@ export const DataImportModal: React.FC<DataImportModalProps> = ({
                     className="w-full bg-[#0B0E14] border border-[#1E293B] rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none"
                   />
                 </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Max. gleichzeitige Positionen:</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={tempSettings.maxOpenPositions ?? 2}
+                    onChange={(e) => setTempSettings({ ...tempSettings, maxOpenPositions: parseInt(e.target.value) || 2 })}
+                    className="w-full bg-[#0B0E14] border border-[#1E293B] rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none"
+                  />
+                </div>
               </div>
 
               <div className="pt-2">

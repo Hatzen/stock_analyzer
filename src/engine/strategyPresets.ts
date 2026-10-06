@@ -10,13 +10,13 @@ export interface StrategyPreset {
 export const STRATEGY_PRESETS: StrategyPreset[] = [
   {
     id: 'noc_september_2026',
-    name: 'Noc Trading – September 2026 (Struktur-Strategie)',
+    name: 'Noc Trading – Super Simple Trading Strategy',
     category: 'SMC',
-    description: 'Noc Trading Konzept: Relevante Swings (Zwischenrauschen ignoriert), BOS-Validierung, Schwäche-Erkennung (Failed Tests) an Demand/Supply-Zonen, Einstiege mit 1:2 CRV.',
+    description: 'Noc Trading Konzept ("My Super Simple Trading Strategy"): Relevante Swings (ohne Rauschen), BOS-Validierung, Schwäche-Erkennung (Failed Tests) an Demand/Supply-Zonen mit lokalem Stop-Loss und 1:2 CRV. Auf 1H-Kerzen werden 100+ Trades pro Jahr generiert!',
     defaultParams: {
-      pivotLength: 4,
+      pivotLength: 2,
       riskRewardRatio: 2.0,
-      atrMultiplierSL: 0.4,
+      atrMultiplierSL: 0.25,
       allowBearishTrendTrades: true
     },
     code: `/**
@@ -41,9 +41,9 @@ export const STRATEGY_PRESETS: StrategyPreset[] = [
  *    - Take-Profit: Festes Chance-Risiko-Verhältnis (CRV) von 1:2.
  */
 function onStrategy(candles, indicators, smc, params, api) {
-  const pivotLength = Number(params.pivotLength) || 4;
+  const pivotLength = Number(params.pivotLength) || 2;
   const rrRatio = Number(params.riskRewardRatio) || 2.0;
-  const atrBuffer = Number(params.atrMultiplierSL) || 0.4;
+  const atrBuffer = Number(params.atrMultiplierSL) || 0.25;
   const allowShorts = Boolean(params.allowBearishTrendTrades);
 
   api.log("Starte Noc Trading Analyse für September 2026...");

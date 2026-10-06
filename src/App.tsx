@@ -25,9 +25,12 @@ import { DataImportModal } from './components/Modal/DataImportModal';
 import { SimulationFlowPanel } from './components/Simulation/SimulationFlowPanel';
 import { ChunkComparisonTable } from './components/Analytics/ChunkComparisonTable';
 
+import type { MarketTimeframe } from './data/realLifeData';
+
 export function App() {
   // 1. Multi-Year Real-Life Assets & Chunking State
   const [selectedAssetId, setSelectedAssetId] = useState<string>('spy');
+  const [timeframe, setTimeframe] = useState<MarketTimeframe>('1H'); // 1H Intraday default for Daytrading & 100+ trades/year
   const [chunkDuration, setChunkDuration] = useState<ChunkDuration>('3M'); // 1 Quarter default
   const [customAsset, setCustomAsset] = useState<{ id: string; name: string; ticker: string; sector: string; candles: Candle[] } | null>(null);
 
@@ -51,11 +54,11 @@ export function App() {
     return REAL_LIFE_ASSETS;
   }, [customAsset]);
 
-  // Generate full multi-year history for current asset
+  // Generate full multi-year history for current asset with selected timeframe (1H or 1D)
   const fullCandles = useMemo(() => {
     const asset = availableAssets.find(a => a.id === selectedAssetId) || availableAssets[0];
-    return asset.generateHistory();
-  }, [selectedAssetId, availableAssets]);
+    return asset.generateHistory(timeframe);
+  }, [selectedAssetId, availableAssets, timeframe]);
 
   // Compute chunks
   const chunks = useMemo(() => {
@@ -279,11 +282,13 @@ export function App() {
 
       {/* Main Workspace Body */}
       <main className="flex-1 w-full p-3 md:p-4 space-y-4 max-w-[1920px] mx-auto">
-        {/* Simulation Flow Controller: Real Life Assets, Intervals, Chunks & Replay */}
+        {/* Simulation Flow Controller: Real Life Assets, Timeframe, Intervals, Chunks & Replay */}
         <SimulationFlowPanel
           selectedAssetId={selectedAssetId}
           onSelectAssetId={setSelectedAssetId}
           availableAssets={availableAssets}
+          timeframe={timeframe}
+          onChangeTimeframe={setTimeframe}
           onOpenDataModal={() => setIsDataModalOpen(true)}
           chunkDuration={chunkDuration}
           onChangeChunkDuration={setChunkDuration}
