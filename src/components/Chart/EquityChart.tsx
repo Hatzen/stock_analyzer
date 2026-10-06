@@ -13,6 +13,17 @@ interface EquityChartProps {
   initialCapital: number;
 }
 
+function formatChartTime(timeStr: string): any {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(timeStr)) {
+    return timeStr;
+  }
+  const date = new Date(timeStr);
+  if (!isNaN(date.getTime())) {
+    return Math.floor(date.getTime() / 1000);
+  }
+  return timeStr;
+}
+
 export const EquityChart: React.FC<EquityChartProps> = ({ equityData, initialCapital }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -71,12 +82,12 @@ export const EquityChart: React.FC<EquityChartProps> = ({ equityData, initialCap
     });
 
     const strategyData = equityData.map(d => ({
-      time: d.time,
+      time: formatChartTime(d.time),
       value: d.equity
     }));
 
     const benchmarkData = equityData.map(d => ({
-      time: d.time,
+      time: formatChartTime(d.time),
       value: d.benchmarkEquity
     }));
 

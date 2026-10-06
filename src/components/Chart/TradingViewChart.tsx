@@ -8,7 +8,7 @@ import {
   ColorType
 } from 'lightweight-charts';
 import type { IChartApi, ISeriesApi } from 'lightweight-charts';
-import type { Candle, ChartOverlay, Trade, SMCZone, SMCSwingPoint } from '../../types/market';
+import type { Candle, ChartOverlay, Trade, SMCZone, SMCSwingPoint, FailedTestPoint } from '../../types/market';
 import { RotateCcw, Layers, Eye, EyeOff } from 'lucide-react';
 
 interface TradingViewChartProps {
@@ -17,7 +17,19 @@ interface TradingViewChartProps {
   overlays?: ChartOverlay[];
   zones?: SMCZone[];
   swingPoints?: SMCSwingPoint[];
+  failedTests?: FailedTestPoint[];
   symbolName: string;
+}
+
+function formatChartTime(timeStr: string): any {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(timeStr)) {
+    return timeStr;
+  }
+  const date = new Date(timeStr);
+  if (!isNaN(date.getTime())) {
+    return Math.floor(date.getTime() / 1000);
+  }
+  return timeStr;
 }
 
 export const TradingViewChart: React.FC<TradingViewChartProps> = ({
@@ -26,6 +38,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
   overlays = [],
   zones = [],
   swingPoints = [],
+  failedTests = [],
   symbolName
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -108,7 +121,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     const volumeSeries = chart.addSeries(HistogramSeries, {
       color: '#26a69a',
       priceFormat: { type: 'volume' },
-      priceScaleId: '', // overlay inside chart
+      priceScaleId: '',
     });
     volumeSeries.priceScale().applyOptions({
       scaleMargins: {
@@ -118,7 +131,6 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     });
     volumeSeriesRef.current = volumeSeries;
 
-    // Subscribe to crosshair move for header stats
     chart.subscribeCrosshairMove((param) => {
       if (!param.time || !param.seriesData) {
         setHoveredData(candles[candles.length - 1] || null);
@@ -137,7 +149,6 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
       }
     });
 
-    // Resize observer
     const handleResize = () => {
       if (chartContainerRef.current && chartRef.current) {
         chartRef.current.applyOptions({
@@ -164,7 +175,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     if (!candleSeriesRef.current || !volumeSeriesRef.current || candles.length === 0) return;
 
     const candleData = candles.map(c => ({
-      time: c.time,
+      time: formatChartTime(c.time),
       open: c.open,
       high: c.high,
       low: c.low,
@@ -172,7 +183,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     }));
 
     const volumeData = candles.map(c => ({
-      time: c.time,
+      time: formatChartTime(c.time),
       value: c.volume,
       color: c.close >= c.open ? 'rgba(16, 185, 129, 0.25)' : 'rgba(239, 68, 68, 0.25)'
     }));
@@ -205,13 +216,16 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
           title: ov.name,
           crosshairMarkerVisible: true
         });
-        lineSeries.setData(ov.data);
+        lineSeries.setData(ov.data.map(d => ({
+          time: formatChartTime(d.time),
+          value: d.value
+        })));
         overlaySeriesRefs.current.push(lineSeries);
       }
     });
   }, [overlays, showOverlays]);
 
-  // Update Trade Markers & SMC Annotations
+  // Update Trade Markers & SMC Annotations & Failed Tests
   useEffect(() => {
     if (!candleSeriesRef.current || !chartRef.current) return;
 
@@ -220,7 +234,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     if (showMarkers) {
       trades.forEach(t => {
         allMarkers.push({
-          time: t.entryTime,
+          time: formatChartTime(t.entryTime),
           position: t.type === 'LONG' ? 'belowBar' : 'aboveBar',
           color: t.type === 'LONG' ? '#10B981' : '#EF4444',
           shape: t.type === 'LONG' ? 'arrowUp' : 'arrowDown',
@@ -229,11 +243,11 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
         const isWin = t.pnl > 0;
         allMarkers.push({
-          time: t.exitTime,
+          time: formatChartTime(t.exitTime),
           position: t.type === 'LONG' ? 'aboveBar' : 'belowBar',
           color: isWin ? '#34D399' : '#F87171',
           shape: 'circle',
-          text: `${t.exitReason === 'TAKE_PROFIT' ? 'TP' : t.exitReason === 'STOP_LOSS' ? 'SL' : 'EXIT'} (${t.pnl >= 0 ? '+' : ''}$${t.pnl})`
+          text: `${t.exitReason === 'TAKE_PROFIT' ? 'TP (1:2)' : t.exitReason === 'STOP_LOSS' ? 'SL' : 'EXIT'} (${t.pnl >= 0 ? '+' : ''}$${t.pnl})`
         });
       });
     }
@@ -242,7 +256,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
       swingPoints.forEach(sp => {
         if (sp.classification === 'STRONG') {
           allMarkers.push({
-            time: sp.time,
+            time: formatChartTime(sp.time),
             position: sp.type === 'LOW' ? 'belowBar' : 'aboveBar',
             color: '#38BDF8',
             shape: 'square',
@@ -250,7 +264,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
           });
         } else if (sp.classification === 'WEAK') {
           allMarkers.push({
-            time: sp.time,
+            time: formatChartTime(sp.time),
             position: sp.type === 'HIGH' ? 'aboveBar' : 'belowBar',
             color: '#94A3B8',
             shape: 'circle',
@@ -260,7 +274,24 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
       });
     }
 
-    allMarkers.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+    // Noc Trading Failed Tests (Weakness of counterparty)
+    if (failedTests.length > 0) {
+      failedTests.forEach(ft => {
+        allMarkers.push({
+          time: formatChartTime(ft.time),
+          position: ft.type === 'FAILED_LOW' ? 'belowBar' : 'aboveBar',
+          color: '#F59E0B',
+          shape: 'circle',
+          text: `⚠️ Schwäche: ${ft.type === 'FAILED_LOW' ? 'Bären scheitern' : 'Bullen scheitern'}`
+        });
+      });
+    }
+
+    allMarkers.sort((a, b) => {
+      const timeA = typeof a.time === 'number' ? a.time : new Date(a.time).getTime();
+      const timeB = typeof b.time === 'number' ? b.time : new Date(b.time).getTime();
+      return timeA - timeB;
+    });
 
     try {
       if (markersRef.current) {
@@ -269,9 +300,9 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
         markersRef.current = createSeriesMarkers(candleSeriesRef.current, allMarkers);
       }
     } catch {
-      // Ignoriere Fehler wenn Skala noch nicht gerendert ist
+      // Ignoriere Fehler vor Abschluss der Initialisierung
     }
-  }, [trades, swingPoints, showMarkers, showSMCLevels]);
+  }, [trades, swingPoints, failedTests, showMarkers, showSMCLevels]);
 
   const handleResetZoom = () => {
     if (chartRef.current) {
@@ -292,7 +323,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
           <div className="flex items-center gap-2">
             <span className="font-mono text-base font-bold text-white tracking-wide">{symbolName}</span>
             <span className="text-xs px-2 py-0.5 rounded bg-[#1E293B] text-sky-400 font-semibold border border-[#334155]">
-              1D
+              {symbolName.includes('2026') ? '4H' : '1D'}
             </span>
           </div>
 
@@ -341,7 +372,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
                 showSMCLevels ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40' : 'bg-[#1E293B] text-slate-400 hover:text-white'
               }`}
             >
-              <span>SMC Struktur</span>
+              <span>SMC / Noc Struktur</span>
             </button>
           )}
 
@@ -355,21 +386,27 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
         </div>
       </div>
 
-      {/* SMC Active Zones Floating Badge */}
-      {zones.length > 0 && (
-        <div className="absolute top-14 left-4 z-10 flex flex-wrap gap-2 pointer-events-none">
-          <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md bg-[#0F141C]/90 border border-emerald-500/40 text-emerald-300 backdrop-blur-md shadow-lg">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>Demand Zones: {zones.filter(z => z.type === 'DEMAND' && !z.isMitigated).length} aktiv</span>
+      {/* Floating Badges */}
+      <div className="absolute top-14 left-4 z-10 flex flex-wrap gap-2 pointer-events-none">
+        {zones.length > 0 && (
+          <>
+            <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md bg-[#0F141C]/90 border border-emerald-500/40 text-emerald-300 backdrop-blur-md shadow-lg">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span>Demand: {zones.filter(z => z.type === 'DEMAND' && !z.isMitigated).length} aktiv</span>
+            </div>
+            <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md bg-[#0F141C]/90 border border-rose-500/40 text-rose-300 backdrop-blur-md shadow-lg">
+              <span className="w-2 h-2 rounded-full bg-rose-400 animate-pulse"></span>
+              <span>Supply: {zones.filter(z => z.type === 'SUPPLY' && !z.isMitigated).length} aktiv</span>
+            </div>
+          </>
+        )}
+        {failedTests.length > 0 && (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md bg-[#0F141C]/90 border border-amber-500/40 text-amber-300 backdrop-blur-md shadow-lg">
+            <span>⚠️ {failedTests.length} Failed Tests (Schwäche)</span>
           </div>
-          <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md bg-[#0F141C]/90 border border-rose-500/40 text-rose-300 backdrop-blur-md shadow-lg">
-            <span className="w-2 h-2 rounded-full bg-rose-400 animate-pulse"></span>
-            <span>Supply Zones: {zones.filter(z => z.type === 'SUPPLY' && !z.isMitigated).length} aktiv</span>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* Chart Canvas Area */}
       <div ref={chartContainerRef} className="flex-1 w-full min-h-[460px]" />
     </div>
   );

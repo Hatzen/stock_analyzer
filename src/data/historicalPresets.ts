@@ -1,5 +1,6 @@
 import type { Candle } from '../types/market';
 import { generateSyntheticCandles } from './syntheticGenerator';
+import { getSeptember2026Candles } from './september2026Data';
 
 export interface MarketAssetPreset {
   id: string;
@@ -11,6 +12,14 @@ export interface MarketAssetPreset {
 }
 
 export const PRESET_ASSETS: MarketAssetPreset[] = [
+  {
+    id: 'september_2026',
+    name: 'September 2026 (Noc Trading)',
+    ticker: 'SEP-2026',
+    category: 'Index',
+    description: 'Historische Backtest-Simulation & Zeitraffer-Analyse für September 2026 mit Noc-Trading-Struktur, Failed Tests & 1:2 CRV',
+    candles: getSeptember2026Candles()
+  },
   {
     id: 'aapl',
     name: 'Apple Inc.',

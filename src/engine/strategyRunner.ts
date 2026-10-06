@@ -4,10 +4,12 @@ import type {
   SimulationSettings,
   ChartOverlay,
   SMCZone,
-  SMCSwingPoint
+  SMCSwingPoint,
+  FailedTestPoint
 } from '../types/market';
 import { Indicators } from '../indicators/indicators';
 import { analyzeMarketStructure } from './smcEngine';
+import { analyzeNocStructure } from './nocTradingEngine';
 import { runBacktest } from './backtester';
 import type { SignalAction } from './backtester';
 
@@ -30,6 +32,7 @@ export function executeStrategyCode(options: StrategyExecutionOptions): Backtest
   const logs: string[] = [];
   let detectedZones: SMCZone[] = [];
   let detectedSwingPoints: SMCSwingPoint[] = [];
+  let detectedFailedTests: FailedTestPoint[] = [];
 
   const api = {
     buy: (opts: { index: number; price?: number; stopLoss?: number; takeProfit?: number; reason?: string }) => {
@@ -60,9 +63,10 @@ export function executeStrategyCode(options: StrategyExecutionOptions): Backtest
     addOverlay: (overlay: ChartOverlay) => {
       overlays.push(overlay);
     },
-    setSMCData: (zones?: SMCZone[], swingPoints?: SMCSwingPoint[]) => {
+    setSMCData: (zones?: SMCZone[], swingPoints?: SMCSwingPoint[], failedTests?: FailedTestPoint[]) => {
       if (zones) detectedZones = zones;
       if (swingPoints) detectedSwingPoints = swingPoints;
+      if (failedTests) detectedFailedTests = failedTests;
     },
     log: (msg: any) => {
       const text = typeof msg === 'object' ? JSON.stringify(msg) : String(msg);
@@ -71,7 +75,8 @@ export function executeStrategyCode(options: StrategyExecutionOptions): Backtest
   };
 
   const smcLib = {
-    analyzeMarketStructure
+    analyzeMarketStructure,
+    analyzeNocStructure
   };
 
   try {
@@ -98,6 +103,7 @@ export function executeStrategyCode(options: StrategyExecutionOptions): Backtest
     overlays,
     detectedZones,
     detectedSwingPoints,
+    detectedFailedTests,
     logs
   );
 

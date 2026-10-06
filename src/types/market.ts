@@ -66,16 +66,6 @@ export interface BacktestMetrics {
   maxConsecutiveLosses: number;
 }
 
-export interface BacktestResult {
-  metrics: BacktestMetrics;
-  trades: Trade[];
-  equityCurve: EquityPoint[];
-  overlays: ChartOverlay[];
-  zones?: SMCZone[];
-  swingPoints?: SMCSwingPoint[];
-  logs: string[];
-}
-
 export interface ChartOverlay {
   name: string;
   color: string;
@@ -109,12 +99,32 @@ export interface SMCZone {
   label: string;
 }
 
+export interface FailedTestPoint {
+  index: number;
+  time: string;
+  price: number;
+  testedLevelPrice: number;
+  type: 'FAILED_LOW' | 'FAILED_HIGH';
+  description: string;
+}
+
+export interface BacktestResult {
+  metrics: BacktestMetrics;
+  trades: Trade[];
+  equityCurve: EquityPoint[];
+  overlays: ChartOverlay[];
+  zones?: SMCZone[];
+  swingPoints?: SMCSwingPoint[];
+  failedTests?: FailedTestPoint[];
+  logs: string[];
+}
+
 export interface SimulationSettings {
   initialCapital: number;
-  riskPercentage: number; // e.g. 2% risk of equity per trade
+  riskPercentage: number;
   positionSizeMode: 'PERCENT_CAPITAL' | 'RISK_PER_TRADE' | 'FIXED_AMOUNT';
   fixedPositionSize: number;
-  commissionPercent: number; // e.g. 0.05%
-  slippagePercent: number; // e.g. 0.02%
+  commissionPercent: number;
+  slippagePercent: number;
   allowShorting: boolean;
 }

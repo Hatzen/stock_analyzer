@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import confetti from 'canvas-confetti';
 import { PRESET_ASSETS } from './data/historicalPresets';
 import type { MarketAssetPreset } from './data/historicalPresets';
@@ -16,6 +16,7 @@ import { MetricsCards } from './components/Analytics/MetricsCards';
 import { TradeLogTable } from './components/Analytics/TradeLogTable';
 import { CodeEditor } from './components/Editor/CodeEditor';
 import { DataImportModal } from './components/Modal/DataImportModal';
+import { ReplayControls } from './components/Replay/ReplayControls';
 
 export function App() {
   const [selectedAsset, setSelectedAsset] = useState<MarketAssetPreset>(PRESET_ASSETS[0]);
@@ -34,22 +35,35 @@ export function App() {
   const [showEquityCurve, setShowEquityCurve] = useState<boolean>(true);
   const [isDataModalOpen, setIsDataModalOpen] = useState<boolean>(false);
 
+  // Zeitraffer / Replay State
+  const [isReplayMode, setIsReplayMode] = useState<boolean>(true);
+  const [replayIndex, setReplayIndex] = useState<number>(35);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [replaySpeed, setReplaySpeed] = useState<number>(1);
+
+  // Compute active candle slice (either full dataset or up to current replay bar)
+  const activeCandles = useMemo(() => {
+    if (!isReplayMode) return candles;
+    const count = Math.min(candles.length, Math.max(10, replayIndex + 1));
+    return candles.slice(0, count);
+  }, [candles, isReplayMode, replayIndex]);
+
   // Strategy Execution Handler
-  const handleRunSimulation = useCallback(() => {
+  const handleRunSimulation = useCallback((candlesToUse = activeCandles) => {
     setIsRunning(true);
     setErrorMessage(null);
 
     setTimeout(() => {
       try {
         const result = executeStrategyCode({
-          candles,
+          candles: candlesToUse,
           code,
           params,
           settings
         });
         setBacktestResult(result);
 
-        if (result.metrics.totalReturn > 0) {
+        if (result.metrics.totalReturn > 0 && !isReplayMode) {
           confetti({
             particleCount: 50,
             spread: 60,
@@ -62,15 +76,33 @@ export function App() {
       } finally {
         setIsRunning(false);
       }
-    }, 50);
-  }, [candles, code, params, settings]);
+    }, 20);
+  }, [activeCandles, code, params, settings, isReplayMode]);
 
-  // Initial Run on Load
+  // Run on mount or when active candles change
   useEffect(() => {
-    handleRunSimulation();
-  }, [selectedAsset]);
+    handleRunSimulation(activeCandles);
+  }, [activeCandles, handleRunSimulation]);
 
-  // Keyboard shortcut: Ctrl + Enter / Cmd + Enter
+  // Replay Timer Loop
+  useEffect(() => {
+    if (!isPlaying || !isReplayMode) return;
+
+    const delay = Math.max(25, 450 / replaySpeed);
+    const interval = setInterval(() => {
+      setReplayIndex(prev => {
+        if (prev >= candles.length - 1) {
+          setIsPlaying(false);
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, delay);
+
+    return () => clearInterval(interval);
+  }, [isPlaying, isReplayMode, replaySpeed, candles.length]);
+
+  // Keyboard shortcut: Ctrl + Enter
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -86,6 +118,14 @@ export function App() {
   const handleSelectAsset = (asset: MarketAssetPreset) => {
     setSelectedAsset(asset);
     setCandles(asset.candles);
+    setIsPlaying(false);
+    if (asset.id === 'september_2026') {
+      setIsReplayMode(true);
+      setReplayIndex(35);
+    } else {
+      setIsReplayMode(false);
+      setReplayIndex(asset.candles.length - 1);
+    }
   };
 
   // Preset Switcher
@@ -112,6 +152,7 @@ export function App() {
     };
     setSelectedAsset(customAsset);
     setCandles(newCandles);
+    setIsReplayMode(false);
   };
 
   // Quick Regime Buttons
@@ -140,7 +181,10 @@ export function App() {
 
     setSelectedAsset(newAsset);
     setCandles(newCandles);
+    setIsReplayMode(false);
   };
+
+  const currentBarDate = activeCandles.length > 0 ? activeCandles[activeCandles.length - 1].time : '';
 
   return (
     <div className="flex flex-col w-full min-h-screen bg-[#080B10] text-[#E2E8F0]">
@@ -149,7 +193,7 @@ export function App() {
         selectedAsset={selectedAsset}
         onSelectAsset={handleSelectAsset}
         onOpenDataModal={() => setIsDataModalOpen(true)}
-        onRunSimulation={handleRunSimulation}
+        onRunSimulation={() => handleRunSimulation()}
         isRunning={isRunning}
         showEditor={showEditor}
         onToggleEditor={() => setShowEditor(!showEditor)}
@@ -160,6 +204,38 @@ export function App() {
 
       {/* Main Workspace Body */}
       <main className="flex-1 w-full p-3 md:p-4 space-y-4 max-w-[1920px] mx-auto">
+        {/* Zeitraffer / Replay Controller Bar */}
+        <ReplayControls
+          isPlaying={isPlaying}
+          onTogglePlay={() => setIsPlaying(!isPlaying)}
+          currentIndex={isReplayMode ? Math.min(replayIndex, candles.length - 1) : candles.length - 1}
+          totalBars={candles.length}
+          currentDate={currentBarDate}
+          onStepForward={() => setReplayIndex(prev => Math.min(candles.length - 1, prev + 1))}
+          onStepBackward={() => setReplayIndex(prev => Math.max(5, prev - 1))}
+          onReset={() => {
+            setIsPlaying(false);
+            setReplayIndex(10);
+          }}
+          onJumpToEnd={() => {
+            setIsPlaying(false);
+            setReplayIndex(candles.length - 1);
+          }}
+          onSeek={(idx) => {
+            setIsPlaying(false);
+            setReplayIndex(idx);
+          }}
+          speed={replaySpeed}
+          onChangeSpeed={setReplaySpeed}
+          isReplayMode={isReplayMode}
+          onToggleReplayMode={() => {
+            setIsPlaying(false);
+            setIsReplayMode(!isReplayMode);
+            if (!isReplayMode) setReplayIndex(35);
+          }}
+          marketTrend={backtestResult?.zones && backtestResult.zones.length > 0 ? 'BULLISH' : 'NEUTRAL'}
+        />
+
         {/* KPI Metrics Summary Ribbon */}
         {backtestResult && (
           <MetricsCards metrics={backtestResult.metrics} />
@@ -172,11 +248,12 @@ export function App() {
             {/* Primary Candlestick Chart */}
             <div className="h-[520px] w-full">
               <TradingViewChart
-                candles={candles}
+                candles={activeCandles}
                 trades={backtestResult?.trades}
                 overlays={backtestResult?.overlays}
                 zones={backtestResult?.zones}
                 swingPoints={backtestResult?.swingPoints}
+                failedTests={backtestResult?.failedTests}
                 symbolName={selectedAsset.ticker}
               />
             </div>
@@ -202,7 +279,7 @@ export function App() {
                 onSelectPreset={handleSelectPreset}
                 params={params}
                 onParamChange={handleParamChange}
-                onRunBacktest={handleRunSimulation}
+                onRunBacktest={() => handleRunSimulation()}
                 logs={backtestResult?.logs || []}
                 errorMessage={errorMessage}
                 isRunning={isRunning}

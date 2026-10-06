@@ -9,6 +9,81 @@ export interface StrategyPreset {
 
 export const STRATEGY_PRESETS: StrategyPreset[] = [
   {
+    id: 'noc_september_2026',
+    name: 'Noc Trading – September 2026 (Struktur-Strategie)',
+    category: 'SMC',
+    description: 'Noc Trading Konzept: Relevante Swings (Zwischenrauschen ignoriert), BOS-Validierung, Schwäche-Erkennung (Failed Tests) an Demand/Supply-Zonen, Einstiege mit 1:2 CRV.',
+    defaultParams: {
+      pivotLength: 4,
+      riskRewardRatio: 2.0,
+      atrMultiplierSL: 0.4,
+      allowBearishTrendTrades: true
+    },
+    code: `/**
+ * STRATEGIE: Noc Trading Struktur-Strategie (September 2026)
+ * 
+ * 1. MARKTSTRUKTUR & MAPPING:
+ *    - Relevante Hochs & Tiefs analysieren.
+ *    - Ein strukturrelevanter Punkt ändert sich erst nach Break of Structure (BOS).
+ *    - Dazwischenliegende Kerzen/Rauschen werden strikt ignoriert.
+ * 
+ * 2. TRENDBESTIMMUNG:
+ *    - Identifikation übergeordneter Trend (Bullish / Bearish).
+ *    - Es wird ausschließlich in Trendrichtung gehandelt!
+ * 
+ * 3. SCHWÄCHE-ERKENNUNG (FAILED TESTS):
+ *    - Pullbacks suchen, bei denen der Markt unfähig ist, das vorherige Extremum zu brechen.
+ *    - Nachlassen der Dynamik der Gegenpartei.
+ * 
+ * 4. EINSTIEGE & STOPS:
+ *    - Trade an der Demand-/Supply-Zone dieses Schwächepunkts.
+ *    - Stop-Loss knapp hinter dem relevanten Extrempunkt.
+ *    - Take-Profit: Festes Chance-Risiko-Verhältnis (CRV) von 1:2.
+ */
+function onStrategy(candles, indicators, smc, params, api) {
+  const pivotLength = Number(params.pivotLength) || 4;
+  const rrRatio = Number(params.riskRewardRatio) || 2.0;
+  const atrBuffer = Number(params.atrMultiplierSL) || 0.4;
+  const allowShorts = Boolean(params.allowBearishTrendTrades);
+
+  api.log("Starte Noc Trading Analyse für September 2026...");
+
+  // Führe die Noc Trading Analyse aus
+  const result = smc.analyzeNocStructure(candles, {
+    pivotLength,
+    riskRewardRatio: rrRatio,
+    atrMultiplierSL: atrBuffer,
+    allowBearishTrendTrades: allowShorts
+  });
+
+  // Registriere alle Trades basierend auf Failed Tests & Zonen
+  for (const sig of result.signals) {
+    if (sig.type === 'BUY') {
+      api.buy({
+        index: sig.index,
+        price: sig.price,
+        stopLoss: sig.stopLoss,
+        takeProfit: sig.takeProfit,
+        reason: sig.reason
+      });
+    } else if (sig.type === 'SELL') {
+      api.sell({
+        index: sig.index,
+        price: sig.price,
+        stopLoss: sig.stopLoss,
+        takeProfit: sig.takeProfit,
+        reason: sig.reason
+      });
+    }
+  }
+
+  // Zeichne Struktur, Zonen und Schwäche-Punkte in den Chart
+  api.setSMCData(result.zones, result.swingPoints, result.failedTests);
+  api.log(\`Noc Analyse abgeschlossen: Trend \${result.currentTrend}, \${result.signals.length} Signale, \${result.failedTests.length} Schwäche-Tests.\`);
+}
+`
+  },
+  {
     id: 'smc_bot',
     name: 'Algorithmic Market Structure Bot (SMC)',
     category: 'SMC',
@@ -48,7 +123,6 @@ function onStrategy(candles, indicators, smc, params, api) {
 
   api.log("Starte SMC Market Structure Analyse mit Pivot-Länge: " + pivotLength);
 
-  // Führe die SMC-Marktstrukturanalyse aus
   const result = smc.analyzeMarketStructure(candles, {
     pivotLength,
     riskRewardRatio: rrRatio,
@@ -56,7 +130,6 @@ function onStrategy(candles, indicators, smc, params, api) {
     targetWeakLiquidity: targetWeak
   });
 
-  // Registriere alle generierten SMC-Signale (Limit/Market Eintritte)
   for (const sig of result.signals) {
     if (sig.type === 'BUY' || sig.type === 'BUY_LIMIT') {
       api.buy({
@@ -77,7 +150,6 @@ function onStrategy(candles, indicators, smc, params, api) {
     }
   }
 
-  // Zeichne die SMC-Zonen und Strukturpunkte in den Chart
   api.setSMCData(result.zones, result.swingPoints);
   api.log(\`SMC-Ergebnis: \${result.swingPoints.length} Swings, \${result.zones.length} Zonen, \${result.signals.length} Signale.\`);
 }
@@ -107,13 +179,11 @@ function onStrategy(candles, indicators, smc, params, api) {
   const slAtrMult = Number(params.stopLossAtrMult) || 1.5;
   const tpAtrMult = Number(params.takeProfitAtrMult) || 3.0;
 
-  // Berechne technische Indikatoren
   const fastEma = indicators.ema(candles, fastPeriod);
   const slowEma = indicators.ema(candles, slowPeriod);
   const rsiValues = indicators.rsi(candles, rsiPeriod);
   const atrValues = indicators.atr(candles, 14);
 
-  // Füge Overlays zum Candlestick-Chart hinzu
   api.addOverlay({
     name: \`EMA \${fastPeriod}\`,
     color: '#00E5FF',
@@ -128,13 +198,11 @@ function onStrategy(candles, indicators, smc, params, api) {
     data: candles.map((c, i) => ({ time: c.time, value: slowEma[i] })).filter(d => d.value !== null)
   });
 
-  // Iteriere durch alle Kerzen und erzeuge Handelssignale
   for (let i = 1; i < candles.length; i++) {
     const candle = candles[i];
     const currentAtr = atrValues[i] || (candle.high - candle.low);
     const currentRsi = rsiValues[i];
 
-    // Bullish Crossover: Schneller EMA kreuzt langsamen EMA nach oben
     if (indicators.crossover(fastEma, slowEma, i)) {
       if (currentRsi !== null && currentRsi <= rsiMaxEntry) {
         api.buy({
@@ -146,7 +214,6 @@ function onStrategy(candles, indicators, smc, params, api) {
       }
     }
 
-    // Bearish Crossunder: Schneller EMA kreuzt langsamen EMA nach unten
     if (indicators.crossunder(fastEma, slowEma, i)) {
       api.closeAll({
         index: i,
@@ -180,7 +247,6 @@ function onStrategy(candles, indicators, smc, params, api) {
   const bb = indicators.bollingerBands(candles, period, stdDev);
   const rsiValues = indicators.rsi(candles, 14);
 
-  // Visualisiere Bollinger Bänder
   api.addOverlay({
     name: 'BB Upper',
     color: 'rgba(255, 82, 82, 0.6)',
@@ -204,23 +270,20 @@ function onStrategy(candles, indicators, smc, params, api) {
     const candle = candles[i];
     const prevCandle = candles[i - 1];
     const lower = bb.lower[i];
-    const upper = bb.upper[i];
     const middle = bb.middle[i];
     const rsiVal = rsiValues[i];
 
-    if (lower === null || middle === null || upper === null) continue;
+    if (lower === null || middle === null) continue;
 
-    // Kaufsignal: Kurs sticht unter unteres Band und schließt wieder darüber ein (Reversal)
     if (prevCandle.low < lower && candle.close > lower && (rsiVal === null || rsiVal < rsiOversold)) {
       api.buy({
         index: i,
         stopLoss: Number((candle.low * 0.985).toFixed(2)),
-        takeProfit: Number(middle.toFixed(2)), // Ziel ist das mittlere Band
+        takeProfit: Number(middle.toFixed(2)),
         reason: 'BB Bounce Long'
       });
     }
 
-    // Ausstieg bei Erreichen des mittleren oder oberen Bandes
     if (candle.close >= middle) {
       api.closeAll({
         index: i,
@@ -242,19 +305,12 @@ function onStrategy(candles, indicators, smc, params, api) {
     },
     code: `/**
  * Eigenes Strategie-Template
- * Du hast vollen Zugriff auf:
- * - candles: { time, open, high, low, close, volume }[]
- * - indicators: sma, ema, rsi, macd, bollingerBands, atr, vwap, highest, lowest, crossover, crossunder
- * - smc: analyzeMarketStructure(candles, options)
- * - params: dynamisch konfigurierbare Eingabeparameter
- * - api: buy(), sell(), closeAll(), addOverlay(), log()
  */
 function onStrategy(candles, indicators, smc, params, api) {
   api.log("Starte benutzerdefinierte Strategie...");
 
   const sma20 = indicators.sma(candles, 20);
 
-  // Beispiel-Overlay
   api.addOverlay({
     name: 'SMA 20',
     color: '#00E676',
@@ -266,12 +322,11 @@ function onStrategy(candles, indicators, smc, params, api) {
     const c = candles[i];
     const prevC = candles[i - 1];
 
-    // Beispiel-Kaufbedingung: Schlusskurs kreuzt SMA 20 nach oben
     if (prevC.close <= sma20[i - 1] && c.close > sma20[i]) {
       api.buy({
         index: i,
-        stopLoss: Number((c.close * 0.97).toFixed(2)), // 3% Stop-Loss
-        takeProfit: Number((c.close * 1.06).toFixed(2)), // 6% Take-Profit (1:2 CRV)
+        stopLoss: Number((c.close * 0.97).toFixed(2)),
+        takeProfit: Number((c.close * 1.06).toFixed(2)),
         reason: 'SMA Ausbruch Long'
       });
     }

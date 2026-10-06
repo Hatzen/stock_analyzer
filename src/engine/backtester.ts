@@ -8,7 +8,8 @@ import type {
   SimulationSettings,
   ChartOverlay,
   SMCZone,
-  SMCSwingPoint
+  SMCSwingPoint,
+  FailedTestPoint
 } from '../types/market';
 
 export interface SignalAction {
@@ -38,6 +39,7 @@ export function runBacktest(
   overlays: ChartOverlay[] = [],
   zones?: SMCZone[],
   swingPoints?: SMCSwingPoint[],
+  failedTests?: FailedTestPoint[],
   logs: string[] = []
 ): BacktestResult {
   const settings: SimulationSettings = { ...DEFAULT_SETTINGS, ...customSettings };
@@ -367,6 +369,7 @@ export function runBacktest(
     overlays,
     zones,
     swingPoints,
+    failedTests,
     logs
   };
 }
