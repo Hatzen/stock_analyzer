@@ -29,12 +29,33 @@ export function App() {
   // 1. Multi-Year Real-Life Assets & Chunking State
   const [selectedAssetId, setSelectedAssetId] = useState<string>('spy');
   const [chunkDuration, setChunkDuration] = useState<ChunkDuration>('3M'); // 1 Quarter default
+  const [customAsset, setCustomAsset] = useState<{ id: string; name: string; ticker: string; sector: string; candles: Candle[] } | null>(null);
+
+  // Available real assets + any live imported stock
+  const availableAssets = useMemo(() => {
+    if (customAsset) {
+      return [
+        ...REAL_LIFE_ASSETS,
+        {
+          id: customAsset.id,
+          name: customAsset.name,
+          ticker: customAsset.ticker,
+          sector: customAsset.sector,
+          startPrice: customAsset.candles[0]?.open || 0,
+          latestPrice: customAsset.candles[customAsset.candles.length - 1]?.close || 0,
+          description: `Live importierter Ticker (${customAsset.candles.length} Kerzen).`,
+          generateHistory: () => [...customAsset.candles]
+        }
+      ];
+    }
+    return REAL_LIFE_ASSETS;
+  }, [customAsset]);
 
   // Generate full multi-year history for current asset
   const fullCandles = useMemo(() => {
-    const asset = REAL_LIFE_ASSETS.find(a => a.id === selectedAssetId) || REAL_LIFE_ASSETS[0];
+    const asset = availableAssets.find(a => a.id === selectedAssetId) || availableAssets[0];
     return asset.generateHistory();
-  }, [selectedAssetId]);
+  }, [selectedAssetId, availableAssets]);
 
   // Compute chunks
   const chunks = useMemo(() => {
@@ -210,19 +231,27 @@ export function App() {
     setParams(prev => ({ ...prev, [key]: value }));
   };
 
-  // Custom data from modal
-  const handleLoadCustomCandles = (_name: string, newCandles: Candle[]) => {
-    // Allows loading custom candles
+  // Custom data from modal or live fetch
+  const handleLoadCustomCandles = (name: string, newCandles: Candle[]) => {
     if (newCandles.length > 0) {
+      const customId = `custom_${Date.now()}`;
+      setCustomAsset({
+        id: customId,
+        name: `${name} (Live Import)`,
+        ticker: name.toUpperCase(),
+        sector: 'Börsen-Live-Daten',
+        candles: newCandles
+      });
+      setSelectedAssetId(customId);
+      setSelectedChunkIndex(0);
       setIsReplayMode(false);
-      handleRunSimulation(newCandles);
     }
   };
 
   const currentBarDate = displayedCandles.length > 0 ? displayedCandles[displayedCandles.length - 1].time : '';
 
   // Active asset descriptor for Navbar
-  const currentAsset = REAL_LIFE_ASSETS.find(a => a.id === selectedAssetId) || REAL_LIFE_ASSETS[0];
+  const currentAsset = availableAssets.find(a => a.id === selectedAssetId) || availableAssets[0];
   const navbarAssetMock: MarketAssetPreset = {
     id: currentAsset.id,
     name: currentAsset.name,
@@ -254,6 +283,8 @@ export function App() {
         <SimulationFlowPanel
           selectedAssetId={selectedAssetId}
           onSelectAssetId={setSelectedAssetId}
+          availableAssets={availableAssets}
+          onOpenDataModal={() => setIsDataModalOpen(true)}
           chunkDuration={chunkDuration}
           onChangeChunkDuration={setChunkDuration}
           chunks={chunks}

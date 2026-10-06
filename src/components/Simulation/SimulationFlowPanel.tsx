@@ -14,10 +14,14 @@ import {
   Zap
 } from 'lucide-react';
 
+import type { RealLifeAssetInfo } from '../../data/realLifeData';
+
 interface SimulationFlowPanelProps {
   // Asset state
   selectedAssetId: string;
   onSelectAssetId: (id: string) => void;
+  availableAssets?: RealLifeAssetInfo[];
+  onOpenDataModal?: () => void;
 
   // Chunk state
   chunkDuration: ChunkDuration;
@@ -54,6 +58,8 @@ interface SimulationFlowPanelProps {
 export const SimulationFlowPanel: React.FC<SimulationFlowPanelProps> = ({
   selectedAssetId,
   onSelectAssetId,
+  availableAssets = REAL_LIFE_ASSETS,
+  onOpenDataModal,
   chunkDuration,
   onChangeChunkDuration,
   chunks,
@@ -99,13 +105,29 @@ export const SimulationFlowPanel: React.FC<SimulationFlowPanelProps> = ({
               onChange={(e) => onSelectAssetId(e.target.value)}
               className="bg-transparent text-white font-bold focus:outline-none cursor-pointer"
             >
-              {REAL_LIFE_ASSETS.map((asset) => (
+              {availableAssets.map((asset) => (
                 <option key={asset.id} value={asset.id} className="bg-[#0F141C] text-white">
                   {asset.ticker} – {asset.name} ({asset.sector})
                 </option>
               ))}
             </select>
           </div>
+
+          {/* Authentic Real-Market Badge */}
+          <span className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-emerald-400 font-mono text-[11px] font-semibold">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span>Echte Börsenkurse (2023–2026)</span>
+          </span>
+
+          {onOpenDataModal && (
+            <button
+              onClick={onOpenDataModal}
+              title="Anderen Ticker live von der Börse abrufen (z.B. MSFT, AMZN, COIN)"
+              className="px-2 py-1 rounded-lg bg-[#131924] hover:bg-[#1E293B] border border-[#1E293B] hover:border-sky-500/50 text-sky-400 text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
+            >
+              <span>+ Ticker suchen</span>
+            </button>
+          )}
 
           {/* Chunk Duration Pills (1M, 3M, 6M, 1Y) */}
           <div className="flex items-center bg-[#131924] p-0.5 rounded-lg border border-[#1E293B] text-xs ml-1">
