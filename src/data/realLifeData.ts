@@ -13,61 +13,80 @@ export interface RealLifeAssetInfo {
 /**
  * Deterministic multi-year candlestick generator with realistic market regimes
  * modeling actual price paths of 2023 - 2026.
+ * Guarantees strictly ascending unique business days without duplicate timestamps.
  */
 function createMultiYearHistory(
   startPrice: number,
   macroWaypoints: { date: string; targetPrice: number; regime: 'BULL' | 'CORRECTION' | 'CHOP' | 'MOMENTUM' }[]
 ): Candle[] {
   const candles: Candle[] = [];
+  const startDate = new Date(macroWaypoints[0].date);
+  const endDate = new Date(macroWaypoints[macroWaypoints.length - 1].date);
+
+  // Generate all unique business days strictly ascending (excluding weekends)
+  const businessDates: string[] = [];
+  let dCur = new Date(startDate);
+  while (dCur <= endDate) {
+    if (dCur.getDay() !== 0 && dCur.getDay() !== 6) {
+      businessDates.push(dCur.toISOString().split('T')[0]);
+    }
+    dCur.setDate(dCur.getDate() + 1);
+  }
+
+  // Pre-calculate timestamp mapping for waypoints
+  const waypointTimes = macroWaypoints.map(w => ({
+    time: new Date(w.date).getTime(),
+    targetPrice: w.targetPrice,
+    regime: w.regime
+  }));
+
   let currentPrice = startPrice;
 
-  // Linear / stochastic interpolation across waypoints
-  for (let w = 0; w < macroWaypoints.length - 1; w++) {
-    const wStart = macroWaypoints[w];
-    const wEnd = macroWaypoints[w + 1];
+  for (let i = 0; i < businessDates.length; i++) {
+    const dateStr = businessDates[i];
+    const curTime = new Date(dateStr).getTime();
 
-    const dStart = new Date(wStart.date);
-    const dEnd = new Date(wEnd.date);
-    const totalDays = Math.round((dEnd.getTime() - dStart.getTime()) / (1000 * 60 * 60 * 24));
-    const tradingDays = Math.max(15, Math.round(totalDays * (5 / 7)));
-
-    const priceDelta = wEnd.targetPrice - wStart.targetPrice;
-    const dailyDrift = priceDelta / tradingDays;
-
-    let dCur = new Date(dStart);
-    for (let day = 0; day < tradingDays; day++) {
-      // Advance to next weekday
-      dCur.setDate(dCur.getDate() + 1);
-      while (dCur.getDay() === 0 || dCur.getDay() === 6) {
-        dCur.setDate(dCur.getDate() + 1);
-      }
-
-      const dateStr = dCur.toISOString().split('T')[0];
-      const noiseSeed = Math.sin(day * 0.73 + w * 17) * 0.012 + Math.cos(day * 1.3 + w * 29) * 0.008;
-
-      const open = currentPrice;
-      const expectedClose = open + dailyDrift + open * noiseSeed;
-      const close = Math.max(1, Number(expectedClose.toFixed(2)));
-
-      const spread = Math.abs(close - open);
-      const high = Number((Math.max(open, close) + spread * 0.5 + open * 0.007).toFixed(2));
-      const low = Number((Math.min(open, close) - spread * 0.5 - open * 0.006).toFixed(2));
-
-      const volumeBase = 2500000;
-      const volMultiplier = 1 + Math.abs(noiseSeed) * 20;
-      const volume = Math.round(volumeBase * volMultiplier);
-
-      candles.push({
-        time: dateStr,
-        open: Number(open.toFixed(2)),
-        high,
-        low,
-        close,
-        volume
-      });
-
-      currentPrice = close;
+    // Find bounding waypoints
+    let wIdx = 0;
+    while (wIdx < waypointTimes.length - 1 && waypointTimes[wIdx + 1].time <= curTime) {
+      wIdx++;
     }
+
+    const wStart = waypointTimes[wIdx];
+    const wEnd = waypointTimes[Math.min(waypointTimes.length - 1, wIdx + 1)];
+
+    let targetPrice = wStart.targetPrice;
+    if (wEnd.time > wStart.time) {
+      const progress = (curTime - wStart.time) / (wEnd.time - wStart.time);
+      targetPrice = wStart.targetPrice + (wEnd.targetPrice - wStart.targetPrice) * progress;
+    }
+
+    // Daily move towards target with realistic market noise
+    const pullTowardsTarget = (targetPrice - currentPrice) * 0.08;
+    const noise = Math.sin(i * 0.73) * 0.012 + Math.cos(i * 1.3) * 0.008;
+    const dailyReturn = (pullTowardsTarget / currentPrice) + noise;
+
+    const open = currentPrice;
+    const close = Math.max(1, Number((open * (1 + dailyReturn)).toFixed(2)));
+
+    const spread = Math.abs(close - open);
+    const high = Number((Math.max(open, close) + spread * 0.5 + open * 0.006).toFixed(2));
+    const low = Number((Math.min(open, close) - spread * 0.5 - open * 0.005).toFixed(2));
+
+    const volumeBase = 2500000;
+    const volMultiplier = 1 + Math.abs(noise) * 25;
+    const volume = Math.round(volumeBase * volMultiplier);
+
+    candles.push({
+      time: dateStr,
+      open: Number(open.toFixed(2)),
+      high,
+      low,
+      close,
+      volume
+    });
+
+    currentPrice = close;
   }
 
   return candles;
@@ -128,7 +147,7 @@ export const REAL_LIFE_ASSETS: RealLifeAssetInfo[] = [
       { date: '2023-10-31', targetPrice: 405, regime: 'CHOP' },
       { date: '2024-03-25', targetPrice: 950, regime: 'MOMENTUM' },
       { date: '2024-04-19', targetPrice: 760, regime: 'CORRECTION' },
-      { date: '2024-06-20', targetPrice: 135, regime: 'BULL' }, // Post-Split Normalized
+      { date: '2024-06-20', targetPrice: 135, regime: 'BULL' },
       { date: '2024-08-05', targetPrice: 98, regime: 'CORRECTION' },
       { date: '2024-12-30', targetPrice: 148, regime: 'BULL' },
       { date: '2025-08-30', targetPrice: 185, regime: 'BULL' },

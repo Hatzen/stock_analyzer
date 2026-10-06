@@ -21,7 +21,26 @@ interface TradingViewChartProps {
   symbolName: string;
 }
 
+export function toTimestamp(timeVal: any): number {
+  if (typeof timeVal === 'number') {
+    return timeVal > 1e11 ? Math.floor(timeVal / 1000) : timeVal;
+  }
+  if (typeof timeVal === 'string') {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(timeVal)) {
+      const parts = timeVal.split('-').map(Number);
+      return Math.floor(Date.UTC(parts[0], parts[1] - 1, parts[2]) / 1000);
+    }
+    const d = new Date(timeVal);
+    const ms = d.getTime();
+    if (!isNaN(ms)) {
+      return Math.floor(ms / 1000);
+    }
+  }
+  return 0;
+}
+
 function formatChartTime(timeStr: string): any {
+  if (!timeStr) return '';
   if (/^\d{4}-\d{2}-\d{2}$/.test(timeStr)) {
     return timeStr;
   }
@@ -30,6 +49,40 @@ function formatChartTime(timeStr: string): any {
     return Math.floor(date.getTime() / 1000);
   }
   return timeStr;
+}
+
+/**
+ * Defensive deduplication and strictly ascending sort helper for Lightweight Charts.
+ * Lightweight Charts throws an unhandled assertion exception if data[i].time <= data[i-1].time.
+ * This function guarantees unique, strictly ascending data points.
+ */
+export function sanitizeSeriesData<T extends { time: any }>(data: T[]): T[] {
+  if (!data || data.length === 0) return [];
+
+  // Group by timestamp to deduplicate (keeps the latest update for that time)
+  const map = new Map<number, T>();
+  for (const item of data) {
+    if (item.time === undefined || item.time === null) continue;
+    const ts = toTimestamp(item.time);
+    map.set(ts, item);
+  }
+
+  // Sort strictly ascending by timestamp
+  const uniqueItems = Array.from(map.values());
+  uniqueItems.sort((a, b) => toTimestamp(a.time) - toTimestamp(b.time));
+
+  // Final pass: ensure strictly ascending (time > prevTime)
+  const strictlyAscending: T[] = [];
+  let prevTs = -Infinity;
+  for (const item of uniqueItems) {
+    const ts = toTimestamp(item.time);
+    if (ts > prevTs) {
+      strictlyAscending.push(item);
+      prevTs = ts;
+    }
+  }
+
+  return strictlyAscending;
 }
 
 export const TradingViewChart: React.FC<TradingViewChartProps> = ({
@@ -174,7 +227,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
   useEffect(() => {
     if (!candleSeriesRef.current || !volumeSeriesRef.current || candles.length === 0) return;
 
-    const candleData = candles.map(c => ({
+    const rawCandles = candles.map(c => ({
       time: formatChartTime(c.time),
       open: c.open,
       high: c.high,
@@ -182,14 +235,21 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
       close: c.close
     }));
 
-    const volumeData = candles.map(c => ({
+    const rawVolume = candles.map(c => ({
       time: formatChartTime(c.time),
       value: c.volume,
       color: c.close >= c.open ? 'rgba(16, 185, 129, 0.25)' : 'rgba(239, 68, 68, 0.25)'
     }));
 
-    candleSeriesRef.current.setData(candleData);
-    volumeSeriesRef.current.setData(volumeData);
+    const candleData = sanitizeSeriesData(rawCandles);
+    const volumeData = sanitizeSeriesData(rawVolume);
+
+    if (candleData.length > 0) {
+      candleSeriesRef.current.setData(candleData);
+    }
+    if (volumeData.length > 0) {
+      volumeSeriesRef.current.setData(volumeData);
+    }
     setHoveredData(candles[candles.length - 1]);
 
     if (chartRef.current) {
@@ -216,10 +276,13 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
           title: ov.name,
           crosshairMarkerVisible: true
         });
-        lineSeries.setData(ov.data.map(d => ({
+        const lineData = sanitizeSeriesData(ov.data.map(d => ({
           time: formatChartTime(d.time),
           value: d.value
         })));
+        if (lineData.length > 0) {
+          lineSeries.setData(lineData);
+        }
         overlaySeriesRefs.current.push(lineSeries);
       }
     });
@@ -288,8 +351,8 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     }
 
     allMarkers.sort((a, b) => {
-      const timeA = typeof a.time === 'number' ? a.time : new Date(a.time).getTime();
-      const timeB = typeof b.time === 'number' ? b.time : new Date(b.time).getTime();
+      const timeA = toTimestamp(a.time);
+      const timeB = toTimestamp(b.time);
       return timeA - timeB;
     });
 

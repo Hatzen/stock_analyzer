@@ -13,7 +13,26 @@ interface EquityChartProps {
   initialCapital: number;
 }
 
+export function toTimestamp(timeVal: any): number {
+  if (typeof timeVal === 'number') {
+    return timeVal > 1e11 ? Math.floor(timeVal / 1000) : timeVal;
+  }
+  if (typeof timeVal === 'string') {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(timeVal)) {
+      const parts = timeVal.split('-').map(Number);
+      return Math.floor(Date.UTC(parts[0], parts[1] - 1, parts[2]) / 1000);
+    }
+    const d = new Date(timeVal);
+    const ms = d.getTime();
+    if (!isNaN(ms)) {
+      return Math.floor(ms / 1000);
+    }
+  }
+  return 0;
+}
+
 function formatChartTime(timeStr: string): any {
+  if (!timeStr) return '';
   if (/^\d{4}-\d{2}-\d{2}$/.test(timeStr)) {
     return timeStr;
   }
@@ -22,6 +41,32 @@ function formatChartTime(timeStr: string): any {
     return Math.floor(date.getTime() / 1000);
   }
   return timeStr;
+}
+
+function sanitizeSeriesData<T extends { time: any }>(data: T[]): T[] {
+  if (!data || data.length === 0) return [];
+
+  const map = new Map<number, T>();
+  for (const item of data) {
+    if (item.time === undefined || item.time === null) continue;
+    const ts = toTimestamp(item.time);
+    map.set(ts, item);
+  }
+
+  const uniqueItems = Array.from(map.values());
+  uniqueItems.sort((a, b) => toTimestamp(a.time) - toTimestamp(b.time));
+
+  const strictlyAscending: T[] = [];
+  let prevTs = -Infinity;
+  for (const item of uniqueItems) {
+    const ts = toTimestamp(item.time);
+    if (ts > prevTs) {
+      strictlyAscending.push(item);
+      prevTs = ts;
+    }
+  }
+
+  return strictlyAscending;
 }
 
 export const EquityChart: React.FC<EquityChartProps> = ({ equityData, initialCapital }) => {
@@ -81,18 +126,22 @@ export const EquityChart: React.FC<EquityChartProps> = ({ equityData, initialCap
       title: 'Buy & Hold'
     });
 
-    const strategyData = equityData.map(d => ({
+    const strategyData = sanitizeSeriesData(equityData.map(d => ({
       time: formatChartTime(d.time),
       value: d.equity
-    }));
+    })));
 
-    const benchmarkData = equityData.map(d => ({
+    const benchmarkData = sanitizeSeriesData(equityData.map(d => ({
       time: formatChartTime(d.time),
       value: d.benchmarkEquity
-    }));
+    })));
 
-    strategySeries.setData(strategyData);
-    benchmarkSeries.setData(benchmarkData);
+    if (strategyData.length > 0) {
+      strategySeries.setData(strategyData);
+    }
+    if (benchmarkData.length > 0) {
+      benchmarkSeries.setData(benchmarkData);
+    }
 
     chart.timeScale().fitContent();
 
