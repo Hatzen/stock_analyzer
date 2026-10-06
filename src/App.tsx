@@ -1,13 +1,19 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import confetti from 'canvas-confetti';
-import { PRESET_ASSETS } from './data/historicalPresets';
-import type { MarketAssetPreset } from './data/historicalPresets';
-import { generateSyntheticCandles } from './data/syntheticGenerator';
+import { REAL_LIFE_ASSETS } from './data/realLifeData';
+import { generateChunks, evaluateAllChunks } from './utils/chunkManager';
 import { STRATEGY_PRESETS } from './engine/strategyPresets';
 import type { StrategyPreset } from './engine/strategyPresets';
 import { executeStrategyCode } from './engine/strategyRunner';
 import { DEFAULT_SETTINGS } from './engine/backtester';
-import type { Candle, BacktestResult, SimulationSettings } from './types/market';
+import type {
+  Candle,
+  BacktestResult,
+  SimulationSettings,
+  ChunkDuration,
+  ChunkComparisonMetric
+} from './types/market';
+import type { MarketAssetPreset } from './data/historicalPresets';
 
 import { Navbar } from './components/Navbar/Navbar';
 import { TradingViewChart } from './components/Chart/TradingViewChart';
@@ -16,12 +22,41 @@ import { MetricsCards } from './components/Analytics/MetricsCards';
 import { TradeLogTable } from './components/Analytics/TradeLogTable';
 import { CodeEditor } from './components/Editor/CodeEditor';
 import { DataImportModal } from './components/Modal/DataImportModal';
-import { ReplayControls } from './components/Replay/ReplayControls';
+import { SimulationFlowPanel } from './components/Simulation/SimulationFlowPanel';
+import { ChunkComparisonTable } from './components/Analytics/ChunkComparisonTable';
 
 export function App() {
-  const [selectedAsset, setSelectedAsset] = useState<MarketAssetPreset>(PRESET_ASSETS[0]);
-  const [candles, setCandles] = useState<Candle[]>(PRESET_ASSETS[0].candles);
+  // 1. Multi-Year Real-Life Assets & Chunking State
+  const [selectedAssetId, setSelectedAssetId] = useState<string>('spy');
+  const [chunkDuration, setChunkDuration] = useState<ChunkDuration>('3M'); // 1 Quarter default
 
+  // Generate full multi-year history for current asset
+  const fullCandles = useMemo(() => {
+    const asset = REAL_LIFE_ASSETS.find(a => a.id === selectedAssetId) || REAL_LIFE_ASSETS[0];
+    return asset.generateHistory();
+  }, [selectedAssetId]);
+
+  // Compute chunks
+  const chunks = useMemo(() => {
+    return generateChunks(fullCandles, chunkDuration);
+  }, [fullCandles, chunkDuration]);
+
+  // Active Chunk selection (default to a rich mid-to-recent chunk)
+  const [selectedChunkIndex, setSelectedChunkIndex] = useState<number>(0);
+
+  // Keep index within bounds if chunks length changes
+  const activeChunkIndex = Math.min(Math.max(0, selectedChunkIndex), Math.max(0, chunks.length - 1));
+  const activeChunk = chunks[activeChunkIndex] || null;
+  const chunkCandles = useMemo(() => activeChunk ? activeChunk.candles : [], [activeChunk]);
+
+  // 2. Simulation Flow & Replay State
+  const [isReplayMode, setIsReplayMode] = useState<boolean>(false);
+  const [currentBarIndex, setCurrentBarIndex] = useState<number>(0);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [replaySpeed, setReplaySpeed] = useState<number>(1);
+  const [autoPauseOnSignal, setAutoPauseOnSignal] = useState<boolean>(true);
+
+  // 3. Strategy & Backtest State
   const [selectedPreset, setSelectedPreset] = useState<StrategyPreset>(STRATEGY_PRESETS[0]);
   const [code, setCode] = useState<string>(STRATEGY_PRESETS[0].code);
   const [params, setParams] = useState<Record<string, any>>(STRATEGY_PRESETS[0].defaultParams);
@@ -31,25 +66,27 @@ export function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState<boolean>(false);
 
+  // UI Panels
   const [showEditor, setShowEditor] = useState<boolean>(true);
   const [showEquityCurve, setShowEquityCurve] = useState<boolean>(true);
   const [isDataModalOpen, setIsDataModalOpen] = useState<boolean>(false);
 
-  // Zeitraffer / Replay State
-  const [isReplayMode, setIsReplayMode] = useState<boolean>(true);
-  const [replayIndex, setReplayIndex] = useState<number>(35);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [replaySpeed, setReplaySpeed] = useState<number>(1);
+  // Multi-Chunk Comparison Scorecard State
+  const [chunkMetrics, setChunkMetrics] = useState<ChunkComparisonMetric[]>([]);
+  const [isComparing, setIsComparing] = useState<boolean>(false);
+  const [showComparison, setShowComparison] = useState<boolean>(false);
 
-  // Compute active candle slice (either full dataset or up to current replay bar)
-  const activeCandles = useMemo(() => {
-    if (!isReplayMode) return candles;
-    const count = Math.min(candles.length, Math.max(10, replayIndex + 1));
-    return candles.slice(0, count);
-  }, [candles, isReplayMode, replayIndex]);
+  // Compute visible candle slice for current chunk
+  const displayedCandles = useMemo(() => {
+    if (!chunkCandles || chunkCandles.length === 0) return [];
+    if (!isReplayMode) return chunkCandles;
+    const safeIndex = Math.min(chunkCandles.length, Math.max(5, currentBarIndex + 1));
+    return chunkCandles.slice(0, safeIndex);
+  }, [chunkCandles, isReplayMode, currentBarIndex]);
 
-  // Strategy Execution Handler
-  const handleRunSimulation = useCallback((candlesToUse = activeCandles) => {
+  // Execute Backtest on current visible candle slice
+  const handleRunSimulation = useCallback((candlesToUse = displayedCandles) => {
+    if (!candlesToUse || candlesToUse.length === 0) return;
     setIsRunning(true);
     setErrorMessage(null);
 
@@ -63,10 +100,19 @@ export function App() {
         });
         setBacktestResult(result);
 
+        // Auto-pause check: did a new trade execute on the very last bar?
+        if (isReplayMode && autoPauseOnSignal && isPlaying && result.trades.length > 0) {
+          const lastTrade = result.trades[result.trades.length - 1];
+          const lastCandle = candlesToUse[candlesToUse.length - 1];
+          if (lastTrade.entryTime === lastCandle.time || lastTrade.exitTime === lastCandle.time) {
+            setIsPlaying(false);
+          }
+        }
+
         if (result.metrics.totalReturn > 0 && !isReplayMode) {
           confetti({
-            particleCount: 50,
-            spread: 60,
+            particleCount: 40,
+            spread: 55,
             origin: { y: 0.8 },
             colors: ['#10B981', '#38BDF8', '#F59E0B']
           });
@@ -77,12 +123,18 @@ export function App() {
         setIsRunning(false);
       }
     }, 20);
-  }, [activeCandles, code, params, settings, isReplayMode]);
+  }, [displayedCandles, code, params, settings, isReplayMode, autoPauseOnSignal, isPlaying]);
 
-  // Run on mount or when active candles change
+  // Run backtest whenever visible candles change
   useEffect(() => {
-    handleRunSimulation(activeCandles);
-  }, [activeCandles, handleRunSimulation]);
+    handleRunSimulation(displayedCandles);
+  }, [displayedCandles, handleRunSimulation]);
+
+  // Reset replay progress when active chunk changes
+  useEffect(() => {
+    setIsPlaying(false);
+    setCurrentBarIndex(chunkCandles.length > 0 ? Math.min(15, chunkCandles.length - 1) : 0);
+  }, [activeChunkIndex, chunkDuration, selectedAssetId, chunkCandles.length]);
 
   // Replay Timer Loop
   useEffect(() => {
@@ -90,8 +142,8 @@ export function App() {
 
     const delay = Math.max(25, 450 / replaySpeed);
     const interval = setInterval(() => {
-      setReplayIndex(prev => {
-        if (prev >= candles.length - 1) {
+      setCurrentBarIndex(prev => {
+        if (prev >= chunkCandles.length - 1) {
           setIsPlaying(false);
           return prev;
         }
@@ -100,35 +152,53 @@ export function App() {
     }, delay);
 
     return () => clearInterval(interval);
-  }, [isPlaying, isReplayMode, replaySpeed, candles.length]);
+  }, [isPlaying, isReplayMode, replaySpeed, chunkCandles.length]);
 
-  // Keyboard shortcut: Ctrl + Enter
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault();
-        handleRunSimulation();
+  // Jump to Next Trade Action
+  const handleJumpToNextTrade = () => {
+    if (!backtestResult || chunkCandles.length === 0) return;
+    // Run full chunk backtest once to locate all trade times
+    const fullResult = executeStrategyCode({
+      candles: chunkCandles,
+      code,
+      params,
+      settings
+    });
+
+    const nextTrade = fullResult.trades.find(t => {
+      const entryIdx = chunkCandles.findIndex(c => c.time === t.entryTime);
+      return entryIdx > currentBarIndex;
+    });
+
+    if (nextTrade) {
+      const targetIdx = chunkCandles.findIndex(c => c.time === nextTrade.entryTime);
+      if (targetIdx !== -1) {
+        setIsPlaying(false);
+        setCurrentBarIndex(targetIdx);
       }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleRunSimulation]);
-
-  // Asset Switcher
-  const handleSelectAsset = (asset: MarketAssetPreset) => {
-    setSelectedAsset(asset);
-    setCandles(asset.candles);
-    setIsPlaying(false);
-    if (asset.id === 'september_2026') {
-      setIsReplayMode(true);
-      setReplayIndex(35);
     } else {
-      setIsReplayMode(false);
-      setReplayIndex(asset.candles.length - 1);
+      // Jump to end if no further trades
+      setCurrentBarIndex(chunkCandles.length - 1);
     }
   };
 
-  // Preset Switcher
+  // Run Multi-Chunk Comparison Scorecard
+  const handleRunBatchComparison = () => {
+    setIsComparing(true);
+    setTimeout(() => {
+      try {
+        const metrics = evaluateAllChunks(chunks, code, params, settings);
+        setChunkMetrics(metrics);
+        setShowComparison(true);
+      } catch (err: any) {
+        setErrorMessage(err.message);
+      } finally {
+        setIsComparing(false);
+      }
+    }, 50);
+  };
+
+  // Strategy Presets
   const handleSelectPreset = (preset: StrategyPreset) => {
     setSelectedPreset(preset);
     setCode(preset.code);
@@ -140,58 +210,34 @@ export function App() {
     setParams(prev => ({ ...prev, [key]: value }));
   };
 
-  // Custom Data Load from Modal
-  const handleLoadCustomCandles = (name: string, newCandles: Candle[]) => {
-    const customAsset: MarketAssetPreset = {
-      id: `custom_${Date.now()}`,
-      name,
-      ticker: name.toUpperCase().slice(0, 8),
-      category: 'Synthetic',
-      description: 'Benutzerdefinierte Marktdaten',
-      candles: newCandles
-    };
-    setSelectedAsset(customAsset);
-    setCandles(newCandles);
-    setIsReplayMode(false);
+  // Custom data from modal
+  const handleLoadCustomCandles = (_name: string, newCandles: Candle[]) => {
+    // Allows loading custom candles
+    if (newCandles.length > 0) {
+      setIsReplayMode(false);
+      handleRunSimulation(newCandles);
+    }
   };
 
-  // Quick Regime Buttons
-  const handleQuickRegimeChange = (regime: 'BULL_TREND' | 'BEAR_CRASH' | 'SIDEWAYS_CHOP') => {
-    const newCandles = generateSyntheticCandles({
-      regime,
-      barsCount: 280,
-      startPrice: 150,
-      volatility: regime === 'BEAR_CRASH' ? 0.024 : 0.016
-    });
+  const currentBarDate = displayedCandles.length > 0 ? displayedCandles[displayedCandles.length - 1].time : '';
 
-    const labels = {
-      BULL_TREND: 'BULL-SIM',
-      BEAR_CRASH: 'CRASH-SIM',
-      SIDEWAYS_CHOP: 'CHOP-SIM'
-    };
-
-    const newAsset: MarketAssetPreset = {
-      id: `regime_${regime.toLowerCase()}`,
-      name: `${regime.replace('_', ' ')} Simulation`,
-      ticker: labels[regime],
-      category: 'Synthetic',
-      description: `Generierte Marktsimulation: ${regime}`,
-      candles: newCandles
-    };
-
-    setSelectedAsset(newAsset);
-    setCandles(newCandles);
-    setIsReplayMode(false);
+  // Active asset descriptor for Navbar
+  const currentAsset = REAL_LIFE_ASSETS.find(a => a.id === selectedAssetId) || REAL_LIFE_ASSETS[0];
+  const navbarAssetMock: MarketAssetPreset = {
+    id: currentAsset.id,
+    name: currentAsset.name,
+    ticker: currentAsset.ticker,
+    category: 'Stock',
+    description: currentAsset.description,
+    candles: chunkCandles
   };
-
-  const currentBarDate = activeCandles.length > 0 ? activeCandles[activeCandles.length - 1].time : '';
 
   return (
     <div className="flex flex-col w-full min-h-screen bg-[#080B10] text-[#E2E8F0]">
       {/* Top Navbar */}
       <Navbar
-        selectedAsset={selectedAsset}
-        onSelectAsset={handleSelectAsset}
+        selectedAsset={navbarAssetMock}
+        onSelectAsset={(a) => setSelectedAssetId(a.id)}
         onOpenDataModal={() => setIsDataModalOpen(true)}
         onRunSimulation={() => handleRunSimulation()}
         isRunning={isRunning}
@@ -199,42 +245,67 @@ export function App() {
         onToggleEditor={() => setShowEditor(!showEditor)}
         showEquityCurve={showEquityCurve}
         onToggleEquityCurve={() => setShowEquityCurve(!showEquityCurve)}
-        onQuickRegimeChange={handleQuickRegimeChange}
+        onQuickRegimeChange={() => {}}
       />
 
       {/* Main Workspace Body */}
       <main className="flex-1 w-full p-3 md:p-4 space-y-4 max-w-[1920px] mx-auto">
-        {/* Zeitraffer / Replay Controller Bar */}
-        <ReplayControls
-          isPlaying={isPlaying}
-          onTogglePlay={() => setIsPlaying(!isPlaying)}
-          currentIndex={isReplayMode ? Math.min(replayIndex, candles.length - 1) : candles.length - 1}
-          totalBars={candles.length}
-          currentDate={currentBarDate}
-          onStepForward={() => setReplayIndex(prev => Math.min(candles.length - 1, prev + 1))}
-          onStepBackward={() => setReplayIndex(prev => Math.max(5, prev - 1))}
-          onReset={() => {
-            setIsPlaying(false);
-            setReplayIndex(10);
-          }}
-          onJumpToEnd={() => {
-            setIsPlaying(false);
-            setReplayIndex(candles.length - 1);
-          }}
-          onSeek={(idx) => {
-            setIsPlaying(false);
-            setReplayIndex(idx);
-          }}
-          speed={replaySpeed}
-          onChangeSpeed={setReplaySpeed}
+        {/* Simulation Flow Controller: Real Life Assets, Intervals, Chunks & Replay */}
+        <SimulationFlowPanel
+          selectedAssetId={selectedAssetId}
+          onSelectAssetId={setSelectedAssetId}
+          chunkDuration={chunkDuration}
+          onChangeChunkDuration={setChunkDuration}
+          chunks={chunks}
+          selectedChunkIndex={activeChunkIndex}
+          onSelectChunkIndex={setSelectedChunkIndex}
           isReplayMode={isReplayMode}
           onToggleReplayMode={() => {
             setIsPlaying(false);
             setIsReplayMode(!isReplayMode);
-            if (!isReplayMode) setReplayIndex(35);
+            if (!isReplayMode) setCurrentBarIndex(Math.min(20, chunkCandles.length - 1));
           }}
-          marketTrend={backtestResult?.zones && backtestResult.zones.length > 0 ? 'BULLISH' : 'NEUTRAL'}
+          isPlaying={isPlaying}
+          onTogglePlay={() => setIsPlaying(!isPlaying)}
+          currentBarIndex={currentBarIndex}
+          totalBarsInChunk={chunkCandles.length}
+          currentDate={currentBarDate}
+          onStepForward={(step = 1) => setCurrentBarIndex(prev => Math.min(chunkCandles.length - 1, prev + step))}
+          onResetReplay={() => {
+            setIsPlaying(false);
+            setCurrentBarIndex(5);
+          }}
+          onJumpToEnd={() => {
+            setIsPlaying(false);
+            setCurrentBarIndex(chunkCandles.length - 1);
+          }}
+          onSeek={(idx) => {
+            setIsPlaying(false);
+            setCurrentBarIndex(idx);
+          }}
+          speed={replaySpeed}
+          onChangeSpeed={setReplaySpeed}
+          autoPauseOnSignal={autoPauseOnSignal}
+          onToggleAutoPause={() => setAutoPauseOnSignal(!autoPauseOnSignal)}
+          onJumpToNextTrade={handleJumpToNextTrade}
+          onRunBatchComparison={handleRunBatchComparison}
+          isComparing={isComparing}
+          showComparison={showComparison}
+          onToggleShowComparison={() => setShowComparison(!showComparison)}
         />
+
+        {/* Multi-Chunk Comparative Scorecard Table */}
+        {showComparison && (
+          <ChunkComparisonTable
+            metrics={chunkMetrics}
+            selectedChunkIndex={activeChunkIndex}
+            onSelectChunk={(idx) => {
+              setSelectedChunkIndex(idx);
+              setIsPlaying(false);
+            }}
+            onClose={() => setShowComparison(false)}
+          />
+        )}
 
         {/* KPI Metrics Summary Ribbon */}
         {backtestResult && (
@@ -248,13 +319,13 @@ export function App() {
             {/* Primary Candlestick Chart */}
             <div className="h-[520px] w-full">
               <TradingViewChart
-                candles={activeCandles}
+                candles={displayedCandles}
                 trades={backtestResult?.trades}
                 overlays={backtestResult?.overlays}
                 zones={backtestResult?.zones}
                 swingPoints={backtestResult?.swingPoints}
                 failedTests={backtestResult?.failedTests}
-                symbolName={selectedAsset.ticker}
+                symbolName={`${currentAsset.ticker} [${activeChunk ? activeChunk.name : ''}]`}
               />
             </div>
 

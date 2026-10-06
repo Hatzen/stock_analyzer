@@ -128,3 +128,29 @@ export interface SimulationSettings {
   slippagePercent: number;
   allowShorting: boolean;
 }
+
+// Chunking & Comparative Flow Types
+export type ChunkDuration = '1M' | '3M' | '6M' | '1Y';
+
+export interface DataChunk {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  candles: Candle[];
+  regimeHint?: string;
+}
+
+export interface ChunkComparisonMetric {
+  chunkId: string;
+  chunkName: string;
+  startDate: string;
+  endDate: string;
+  totalReturn: number;
+  benchmarkReturn: number;
+  winRate: number;
+  profitFactor: number;
+  maxDrawdown: number;
+  tradesCount: number;
+  sharpeRatio: number;
+}
